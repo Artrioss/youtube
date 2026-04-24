@@ -1,0 +1,40 @@
+name: Fetch & Download YouTube Videos
+
+on:
+  workflow_dispatch:   # دستی
+  schedule:
+    - cron: '0 6 * * *'   # هر روز ساعت ۶ صبح UTC
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run script (fetch metadata + download samples)
+        run: python fetch_videos.py
+
+      - name: Commit CSV file to repo
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: 'Update video list [skip ci]'
+          file_pattern: youtube_videos.csv
+          commit_user_name: github-actions[bot]
+          commit_user_email: github-actions[bot]@users.noreply.github.com
+
+      - name: Upload downloaded videos as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: downloaded-videos
+          path: downloads/
+          if-no-files-found: ignore
