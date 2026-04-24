@@ -22,7 +22,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run script (fetch metadata + download samples)
-        run: python fetch_videos.py
+        run: python ‫fetch_youtube.py
 
       - name: Commit CSV file to repo
         uses: stefanzweifel/git-auto-commit-action@v5
