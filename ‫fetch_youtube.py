@@ -1,145 +1,153 @@
-import os
 import csv
 import sys
-import yt_dlp
+import requests
+from datetime import timedelta
 from collections import OrderedDict
 
-# لینک‌هایی که می‌خواهید ویدیوهایشان استخراج شود
-SOURCES = [
-    'https://www.youtube.com/channel/UCGEaIQSwlHRoG5gtg_MvWYw',
-    'https://www.youtube.com/channel/UCQQbm4mH_9RtUiYoKr1Gq7g',
-    'https://www.youtube.com/playlist?list=PLdwaQvROfx1cbUWaSsD3G8_JKHRozr5rD',
+INSTANCES = [
+    'https://invidious.fdn.fr',
+    'https://yewtu.be',
+    'https://vid.puffyan.us',
+    'https://invidious.projectsegfau.lt',
+    'https://invidious.slipfox.xyz',
+    'https://invidious.privacydev.net',
+    'https://iv.ggtyler.dev',
+    'https://invidious.lunar.icu'
 ]
 
-OUTPUT_CSV = 'youtube_videos.csv'
-
-# تنظیمات yt-dlp برای استخراج متادیتا (بدون دانلود محتوا)
-EXTRACT_OPTS = {
-    'quiet': True,
-    'no_warnings': True,
-    'extract_flat': True,        # فقط لینک‌ها را می‌گیرد، وارد تکی‌تکی نمی‌شود
-    'force_generic_extractor': False,
-    'ignoreerrors': True,
-    'dump_single_json': False,
-    'playlistend': None,         # None یعنی همه
+SOURCES = {
+    'channel': [
+        'UCGEaIQSwlHRoG5gtg_MvWYw',
+        'UCQQbm4mH_9RtUiYoKr1Gq7g'
+    ],
+    'playlist': [
+        'PLdwaQvROfx1cbUWaSsD3G8_JKHRozr5rD'
+    ]
 }
 
-# تنظیمات برای دانلود ویدیو
-DOWNLOAD_OPTS = {
-    'quiet': True,
-    'no_warnings': True,
-    'format': 'bestvideo[height<=720]+bestaudio/best[height<=720]',  # حداکثر 720p تا حجم معقول بماند
-    'merge_output_format': 'mp4',
-    'outtmpl': 'downloads/%(title).100s [%(id)s].%(ext)s',  # نام فایل
-    'ignoreerrors': True,
-    'max_downloads': 3,          # تعداد ویدیو از هر منبع
-    'playlistend': 3,            # فقط ۳ ویدیوی آخر (جدیدترین‌ها) 
-}
+OUTPUT_FILE = 'youtube_videos.csv'
 
-def ensure_downloads_dir():
-    os.makedirs('downloads', exist_ok=True)
-
-def fetch_metadata(url):
-    """اطلاعات تمام ویدیوهای یک کانال/پلی‌لیست را برمی‌گرداند."""
-    opts = EXTRACT_OPTS.copy()
-    # اضافه کردن یک extractor مناسب
-    with yt_dlp.YoutubeDL(opts) as ydl:
+def get_working_instance():
+    for instance in INSTANCES:
         try:
-            info = ydl.extract_info(url, download=False)
-        except Exception as e:
-            print(f'Error extracting {url}: {e}', file=sys.stderr)
-            return []
+            resp = requests.get(f'{instance}/api/v1/trending', timeout=10)
+            if resp.status_code == 200:
+                print(f'Using instance: {instance}')
+                return instance
+        except Exception:
+            continue
+    print('Error: No Invidious instance available.')
+    sys.exit(1)
 
-    entries = []
-    if 'entries' in info:  # پلی‌لیست/کانال
-        for entry in info['entries']:
-            if entry is None:
-                continue
-            video_id = entry.get('id')
+def fetch_channel_videos(instance, channel_id):
+    videos = []
+    url = f'{instance}/api/v1/channels/{channel_id}/videos'
+    params = {'sort_by': 'newest'}
+    
+    while True:
+        try:
+            resp = requests.get(url, params=params, timeout=30)
+            if resp.status_code != 200:
+                print(f'Error fetching channel {channel_id}: HTTP {resp.status_code}')
+                break
+            data = resp.json()
+        except Exception as e:
+            print(f'Error fetching channel {channel_id}: {e}')
+            break
+        
+        for video in data.get('videos', []):
+            video_id = video.get('videoId')
             if not video_id:
-                # برخی موارد ممکن است id نداشته باشند (مثلاً لینک‌های پاک‌شده)
                 continue
-            title = entry.get('title', '')
-            channel = entry.get('channel', '') or entry.get('uploader', '')
-            duration = entry.get('duration')  # ثانیه یا None
-            if duration:
-                hrs, remainder = divmod(int(duration), 3600)
-                mins, secs = divmod(remainder, 60)
-                length_str = f'{hrs}:{mins:02d}:{secs:02d}' if hrs else f'{mins}:{secs:02d}'
-            else:
-                length_str = ''
+            title = video.get('title', '')
+            author = video.get('author', '')
+            length_sec = video.get('lengthSeconds', 0)
+            length_str = str(timedelta(seconds=length_sec))
             video_url = f'https://www.youtube.com/watch?v={video_id}'
-            entries.append({
+            videos.append({
                 'video_name': title,
-                'channel_name': channel,
+                'channel_name': author,
                 'length': length_str,
-                'video_url': video_url,
-                'id': video_id
+                'video_url': video_url
             })
-    else:  # یک ویدیوی تنها
-        video_id = info.get('id')
-        if video_id:
-            title = info.get('title', '')
-            channel = info.get('channel', '') or info.get('uploader', '')
-            duration = info.get('duration')
-            if duration:
-                hrs, rem = divmod(int(duration), 3600)
-                mins, secs = divmod(rem, 60)
-                length_str = f'{hrs}:{mins:02d}:{secs:02d}' if hrs else f'{mins}:{secs:02d}'
-            else:
-                length_str = ''
-            video_url = f'https://www.youtube.com/watch?v={video_id}'
-            entries.append({
-                'video_name': title,
-                'channel_name': channel,
-                'length': length_str,
-                'video_url': video_url,
-                'id': video_id
-            })
-    return entries
+        
+        continuation = data.get('continuation')
+        if not continuation:
+            break
+        params['continuation'] = continuation
+    
+    return videos
 
-def download_videos(source_url, max_videos=3):
-    """چند ویدیو از یک منبع دانلود کرده و لیست فایل‌های دانلود شده را برمی‌گرداند."""
-    opts = DOWNLOAD_OPTS.copy()
-    opts['playlistend'] = max_videos
-    opts['max_downloads'] = max_videos
-    opts['outtmpl'] = 'downloads/%(title).100s [%(id)s].%(ext)s'
-    ensure_downloads_dir()
-    with yt_dlp.YoutubeDL(opts) as ydl:
+def fetch_playlist_videos(instance, playlist_id):
+    videos = []
+    url = f'{instance}/api/v1/playlists/{playlist_id}'
+    params = {}
+    
+    while True:
         try:
-            ydl.download([source_url])
+            resp = requests.get(url, params=params, timeout=30)
+            if resp.status_code != 200:
+                print(f'Error fetching playlist {playlist_id}: HTTP {resp.status_code}')
+                break
+            data = resp.json()
         except Exception as e:
-            print(f'Download error from {source_url}: {e}', file=sys.stderr)
+            print(f'Error fetching playlist {playlist_id}: {e}')
+            break
+        
+        for video in data.get('videos', []):
+            video_id = video.get('videoId')
+            if not video_id:
+                continue
+            title = video.get('title', '')
+            author = video.get('author', '')
+            length_sec = video.get('lengthSeconds', 0)
+            length_str = str(timedelta(seconds=length_sec))
+            video_url = f'https://www.youtube.com/watch?v={video_id}'
+            videos.append({
+                'video_name': title,
+                'channel_name': author,
+                'length': length_str,
+                'video_url': video_url
+            })
+        
+        continuation = data.get('continuation')
+        if not continuation:
+            break
+        params['continuation'] = continuation
+    
+    return videos
 
 def main():
-    all_videos = OrderedDict()  # استفاده از OrderedDict برای حذف تکراری بر اساس video_url
-    for src in SOURCES:
-        print(f'Fetching metadata from: {src}')
-        entries = fetch_metadata(src)
-        for e in entries:
-            key = e['video_url']
+    instance = get_working_instance()
+    all_videos = OrderedDict()
+    
+    for channel_id in SOURCES['channel']:
+        print(f'Fetching channel: {channel_id}')
+        videos = fetch_channel_videos(instance, channel_id)
+        for v in videos:
+            key = v['video_url']
             if key not in all_videos:
-                all_videos[key] = e
+                all_videos[key] = v
+        print(f'Fetched {len(videos)} videos')
+    
+    for playlist_id in SOURCES['playlist']:
+        print(f'Fetching playlist: {playlist_id}')
+        videos = fetch_playlist_videos(instance, playlist_id)
+        for v in videos:
+            key = v['video_url']
+            if key not in all_videos:
+                all_videos[key] = v
+        print(f'Fetched {len(videos)} videos')
+    
     print(f'Total unique videos: {len(all_videos)}')
-
-    # ذخیره CSV
-    with open(OUTPUT_CSV, 'w', newline='', encoding='utf-8-sig') as f:
+    
+    with open(OUTPUT_FILE, 'w', newline='', encoding='utf-8-sig') as f:
         writer = csv.DictWriter(f, fieldnames=['video_name', 'channel_name', 'length', 'video_url'])
         writer.writeheader()
         for v in all_videos.values():
-            writer.writerow({
-                'video_name': v['video_name'],
-                'channel_name': v['channel_name'],
-                'length': v['length'],
-                'video_url': v['video_url']
-            })
-    print(f'Saved {OUTPUT_CSV}')
-
-    # دانلود چند ویدیو از هر منبع
-    print('Downloading a few sample videos (3 from each source)...')
-    for src in SOURCES:
-        download_videos(src, max_videos=3)
-    print('Downloads complete.')
+            writer.writerow(v)
+    
+    print(f'Saved to {OUTPUT_FILE}')
 
 if __name__ == '__main__':
     main()
